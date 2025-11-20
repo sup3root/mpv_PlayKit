@@ -2,7 +2,7 @@
 ### 文档： https://github.com/hooke007/mpv_PlayKit/wiki/3_K7sfunc
 ##################################################
 
-__version__ = "0.10.12"
+__version__ = "0.11.1"
 
 __all__ = [
 	"vs_t_dft",
@@ -14,6 +14,7 @@ __all__ = [
 	"NGU_HQ",
 
 	"MVT_LQ", "MVT_MQ",
+	"DRBA_NV",
 	"RIFE_STD", "RIFE_COREML", "RIFE_DML", "RIFE_NV",
 	"SVP_LQ", "SVP_HQ", "SVP_PRO",
 
@@ -1175,6 +1176,124 @@ def MVT_MQ(
 		output =  core.mv.BlockFPS(cut0, sup, bvec, fvec, **bofp, mode=block_mode)
 	else :
 		output = core.mv.FlowFPS(cut0, sup, bvec, fvec, **bofp, mask=flow_mask)
+
+	return output
+
+##################################################
+## DRBA补帧 TensorRT
+##################################################
+
+def DRBA_NV(
+	input : vs.VideoNode,
+	model : typing.Literal[1, 2] = 2,
+	int8_qnt : bool = False,
+	turbo : typing.Literal[0, 1, 2] = 1,
+	fps_in : float = 23.976,
+	fps_num : int = 2,
+	fps_den : int = 1,
+	sc_mode : typing.Literal[0, 1, 2] = 0,
+	gpu : typing.Literal[0, 1, 2] = 0,
+	gpu_t : int = 2,
+	ws_size : int = 0,
+) -> vs.VideoNode :
+
+	func_name = "DRBA_NV"
+	_validate_input_clip(func_name, input)
+	_validate_literal(func_name, "model", model, [1, 2])
+	_validate_bool(func_name, "int8_qnt", int8_qnt)
+	_validate_literal(func_name, "turbo", turbo, [0, 1, 2])
+	_validate_numeric(func_name, "fps_in", fps_in, min_val=0.0, exclusive_min=True)
+	_validate_numeric(func_name, "fps_num", fps_num, min_val=2, int_only=True)
+	if not isinstance(fps_den, int) or fps_den >= fps_num or fps_num/fps_den <= 1 :
+		raise vs.Error(f"模块 {func_name} 的子参数 fps_den 的值无效")
+	_validate_literal(func_name, "sc_mode", sc_mode, [0, 1, 2])
+	_validate_literal(func_name, "gpu", gpu, [0, 1, 2])
+	_validate_numeric(func_name, "gpu_t", gpu_t, min_val=1, int_only=True)
+	_validate_numeric(func_name, "ws_size", ws_size, min_val=0, int_only=True)
+
+	_check_plugin(func_name, "trt")
+	if sc_mode == 1 :
+		_check_plugin(func_name, "misc")
+	elif sc_mode == 2 :
+		_check_plugin(func_name, "mv")
+	_check_plugin(func_name, "akarin")
+
+	model_scale = False
+	model_ap = False
+	if turbo :
+		model_ap = True
+		if turbo == 2 :
+			model_scale = True
+
+	plg_dir = os.path.dirname(core.trt.Version()["path"]).decode()
+	mdl_pname = "drba/"
+	mdl_fname = ["distilDRBA_v1", "distilDRBA_v2_lite"][[1, 2].index(model)]  ## 暂只检查核心模型
+	mdl_pth = plg_dir + "/models/" + mdl_pname + mdl_fname + ".onnx"
+	if not os.path.exists(mdl_pth) :
+		raise vs.Error(f"模块 {func_name} 所请求的模型缺失")
+
+	vsmlrt = _check_script(func_name, "vsmlrt", "3.22.10")
+
+	w_in, h_in = input.width, input.height
+	size_in = w_in * h_in
+	colorlv = getattr(input.get_frame(0).props, "_ColorRange", 0)
+	fmt_in = input.format.id
+	fps_factor = fps_num/fps_den
+
+	fps_den = 1  ## 暂锁1
+
+	st_eng = False
+	if model_ap :
+		st_eng = True
+	if (size_in > 4096 * 2176) :
+		raise Exception("源分辨率超过限制的范围，已临时中止。")
+	if not st_eng and (((w_in > 4096) or (h_in > 2176)) or ((w_in < 384) or (h_in < 384))) :
+		raise Exception("源分辨率不属于动态引擎支持的范围，已临时中止。")
+
+	tile_size = 64
+	scale = 1.0
+	if model_scale :
+		tile_size = 128
+		scale = 0.5
+	w_tmp = math.ceil(w_in / tile_size) * tile_size - w_in
+	h_tmp = math.ceil(h_in / tile_size) * tile_size - h_in
+
+	shape_list = {
+		64: {"min": (5, 4), "opt": (30, 17), "max1": (64, 34), "max2": (32, 17)},
+		128: {"min": (3, 2), "opt": (15, 9), "max1": (32, 17), "max2": (16, 9)},}
+	shape_cfg = shape_list[tile_size]
+	min_shapes = [tile_size * x for x in shape_cfg["min"]]
+	opt_shapes = [tile_size * x for x in shape_cfg["opt"]]
+	max_shapes1 = [tile_size * x for x in shape_cfg["max1"]]
+	max_shapes2 = [tile_size * x for x in shape_cfg["max2"]]
+
+	cut0 = SCENE_DETECT(input=input, sc_mode=sc_mode)
+
+	cut1 = core.resize.Point(clip=cut0, format=vs.RGBH, matrix_in_s="709")
+	if model_ap :
+		fin = vsmlrt.DRBA(clip=cut1, multi=fractions.Fraction(fps_num, fps_den), scale=scale, ap=model_ap, model=model, backend=vsmlrt.BackendV2.TRT(
+			num_streams=gpu_t, int8=int8_qnt, fp16=True, output_format=1,
+			workspace=None if ws_size < 128 else ws_size,
+			use_cuda_graph=True, use_cublas=False, use_cudnn=False,
+			static_shape=st_eng, min_shapes=[0, 0],
+			opt_shapes=None, max_shapes=None,
+			device_id=gpu, short_path=True))
+	else :
+		if w_tmp + h_tmp > 0 :
+			cut1 = core.std.AddBorders(clip=cut1, right=w_tmp, bottom=h_tmp)
+		fin = vsmlrt.DRBA(clip=cut1, multi=fractions.Fraction(fps_num, fps_den), scale=scale, ap=model_ap, model=model, backend=vsmlrt.BackendV2.TRT(
+			num_streams=gpu_t, int8=int8_qnt, fp16=True, output_format=1,
+			workspace=None if ws_size < 128 else (ws_size if st_eng else ws_size * 2),
+			use_cuda_graph=True, use_cublas=False, use_cudnn=False,
+			static_shape=st_eng, min_shapes=[0, 0] if st_eng else min_shapes,
+			opt_shapes=None if st_eng else opt_shapes,
+			max_shapes=None if st_eng else (max_shapes1 if (size_in > 2048 * 1088) else max_shapes2),
+			device_id=gpu, short_path=True))
+		if w_tmp + h_tmp > 0 :
+			fin = core.std.Crop(clip=fin, right=w_tmp, bottom=h_tmp)
+	output = core.resize.Bilinear(clip=fin, format=fmt_in, matrix_s="709", range=1 if colorlv==0 else None)
+	if not fps_factor.is_integer() :
+		output = core.std.AssumeFPS(clip=output, fpsnum=fps_in * fps_num * 1e6, fpsden=fps_den * 1e6)
 
 	return output
 
