@@ -3932,10 +3932,11 @@ void hook() {
 
 void hook() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    vec4 orig = texelFetch(HOOKED_raw, pos, 0) * HOOKED_mul;
     vec4 conv_out = conv9_mul * texelFetch(conv9_raw, pos, 0);
     vec4 result;
-    result.rgb = conv_out.rgb + texelFetch(HOOKED_raw, pos, 0).rgb * HOOKED_mul;
-    result.a = 1.0;
+    result.rgb = conv_out.rgb + orig.rgb;
+    result.a = orig.a;
     imageStore(out_image, pos, clamp(result, 0.0, 1.0));
 }
 

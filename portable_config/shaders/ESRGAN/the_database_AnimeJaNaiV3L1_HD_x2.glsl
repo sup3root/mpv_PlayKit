@@ -4065,6 +4065,7 @@ void hook() {
     ivec2 sub = opos % 2;
     int idx = sub.y * 2 + sub.x;
     ivec2 base_pixel = ipos * ivec2(3, 1);
+    vec4 orig = texelFetch(HOOKED_raw, ipos, 0) * HOOKED_mul;
     vec4 tileR = conv9_mul * texelFetch(conv9_raw, base_pixel + ivec2(0, 0), 0);
     vec4 tileG = conv9_mul * texelFetch(conv9_raw, base_pixel + ivec2(1, 0), 0);
     vec4 tileB = conv9_mul * texelFetch(conv9_raw, base_pixel + ivec2(2, 0), 0);
@@ -4072,8 +4073,8 @@ void hook() {
     result.r = tileR[idx];
     result.g = tileG[idx];
     result.b = tileB[idx];
-    result.a = 1.0;
-    result.rgb += texelFetch(HOOKED_raw, ipos, 0).rgb * HOOKED_mul;
+    result.a = orig.a;
+    result.rgb += orig.rgb;
     imageStore(out_image, opos, clamp(result, 0.0, 1.0));
 }
 
