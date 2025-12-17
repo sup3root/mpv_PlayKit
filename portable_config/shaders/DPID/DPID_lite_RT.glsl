@@ -13,7 +13,7 @@ LICENSE:
 
 //!PARAM LBD
 //!TYPE float
-//!MINIMUM 0.001
+//!MINIMUM 0.0
 //!MAXIMUM 3.0
 1.0
 
