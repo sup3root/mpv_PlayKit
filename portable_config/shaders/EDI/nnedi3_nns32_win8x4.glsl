@@ -19,7 +19,6 @@
 //!BIND HOOKED
 //!SAVE DY
 //!DESC [nnedi3_nns32_win8x4] (double_y, nns32, win8x4)
-//!OFFSET 0.000 -0.500
 //!HEIGHT HOOKED.h 2 *
 //!WHEN OUTPUT.w HOOKED.w 1.200 * > OUTPUT.h HOOKED.h 1.200 * > *
 //!COMPUTE 32 16 32 8
