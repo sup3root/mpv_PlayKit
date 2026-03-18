@@ -1173,11 +1173,11 @@ mp.register_script_message('menu-action', function(name, ...)
 		if method then menu[method](menu, ...) end
 	end
 end)
-mp.register_script_message('thumb_engine-info', function(json)
+mp.register_script_message(options.thumbnail_provider .. '-info', function(json)
 	local data = utils.parse_json(json)
 	if type(data) ~= 'table' or not data.width or not data.height then
 		thumbnail.disabled = true
-		msg.error('thumb_engine-info: received json didn\'t produce a table with thumbnail information')
+		msg.error(options.thumbnail_provider .. '-info: received json didn\'t produce a table with thumbnail information')
 	else
 		thumbnail = data
 		request_render()
